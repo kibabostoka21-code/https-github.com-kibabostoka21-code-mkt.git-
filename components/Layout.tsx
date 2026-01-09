@@ -41,10 +41,10 @@ const Layout: React.FC<LayoutProps> = ({ children, activeView, onViewChange }) =
           
           <button 
             onClick={() => onViewChange('kiosk')}
-            className={`w-full flex items-center gap-4 p-4 rounded-2xl transition-all font-bold group ${
+            className={`w-full flex items-center gap-4 p-4 rounded-2xl transition-all font-bold group hover:scale-[1.03] hover:-translate-y-1 hover:shadow-2xl hover:shadow-[#f39200]/20 ${
               activeView === 'kiosk' 
                 ? 'bg-gradient-to-r from-orange-600 to-yellow-400 text-black shadow-lg shadow-orange-100' 
-                : 'hover:bg-gray-50 text-gray-500 hover:text-gray-900'
+                : 'hover:bg-white text-gray-500 hover:text-gray-900 border border-transparent hover:border-gray-100'
             }`}
           >
             <LogIn size={20} className={activeView === 'kiosk' ? 'text-black' : 'text-gray-400 group-hover:text-orange-600'} />
@@ -53,10 +53,10 @@ const Layout: React.FC<LayoutProps> = ({ children, activeView, onViewChange }) =
 
           <button 
             onClick={() => onViewChange('dashboard')}
-            className={`w-full flex items-center gap-4 p-4 rounded-2xl transition-all font-bold group ${
+            className={`w-full flex items-center gap-4 p-4 rounded-2xl transition-all font-bold group hover:scale-[1.03] hover:-translate-y-1 hover:shadow-2xl hover:shadow-[#f39200]/20 ${
               activeView === 'dashboard' 
                 ? 'bg-black text-white shadow-lg shadow-gray-200' 
-                : 'hover:bg-gray-50 text-gray-500 hover:text-gray-900'
+                : 'hover:bg-white text-gray-500 hover:text-gray-900 border border-transparent hover:border-gray-100'
             }`}
           >
             <LayoutDashboard size={20} className={activeView === 'dashboard' ? 'text-orange-500' : 'text-gray-400 group-hover:text-orange-600'} />
