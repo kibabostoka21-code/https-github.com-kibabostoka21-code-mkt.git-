@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, AreaChart, Area,
   Cell 
@@ -7,11 +7,13 @@ import {
 import { 
   FileSpreadsheet, FileText, Map as MapIcon, Users, MessageSquare, 
   Search, Sparkles, MapPin, RefreshCcw, User,
-  FileDown, Navigation, Store, Star, Globe, Heart, BellRing, ExternalLink, TrendingUp, Info, Maximize2, Target
+  FileDown, Navigation, Store, Star, Globe, Heart, BellRing, ExternalLink, TrendingUp, Info, Maximize2, Target,
+  BrainCircuit, Zap, AlertCircle, Loader2, Radar, Calendar, Filter, X, Cloud, Activity, Terminal
 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Feedback, FeedbackRating } from '../types';
+import { analyzeFeedback } from '../services/geminiService';
 
 interface ManagerDashboardProps { feedbacks: Feedback[]; }
 
@@ -71,11 +73,16 @@ const ALL_STORES: StoreLocation[] = [
   { id: '40', name: 'Avenida Brasil', x: 52, y: 40, rating: 4.7, lat: -8.8350, lng: 13.2550 },
 ];
 
+/**
+ * Tooltip refinado com cores da marca Kibabo e animação suave.
+ */
 const ActionTooltip = ({ text }: { text: string }) => (
-  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 opacity-0 group-hover:opacity-100 pointer-events-none transition-all duration-300 transform translate-y-2 group-hover:translate-y-0 z-50">
-    <div className="bg-black text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest text-center shadow-2xl border border-[#f39200]/30 whitespace-nowrap">
-      {text}
-      <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-black rotate-45 border-r border-b border-[#f39200]/30"></div>
+  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 opacity-0 group-hover:opacity-100 pointer-events-none transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] transform translate-y-3 group-hover:translate-y-0 z-50">
+    <div className="bg-black/95 backdrop-blur-md text-white px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-[0.15em] text-center shadow-2xl border-b-2 border-[#f39200] whitespace-nowrap min-w-[140px]">
+      <div className="absolute -bottom-[5px] left-1/2 -translate-x-1/2 w-2.5 h-2.5 bg-black rotate-45 border-r border-b border-[#f39200]"></div>
+      <span className="bg-gradient-to-r from-orange-100 to-yellow-200 bg-clip-text text-transparent">
+        {text}
+      </span>
     </div>
   </div>
 );
@@ -86,15 +93,45 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
   const [tableSearchTerm, setTableSearchTerm] = useState('');
   const [selectedStoreOnMap, setSelectedStoreOnMap] = useState<StoreLocation | null>(null);
   const [showLiveNotification, setShowLiveNotification] = useState(false);
+  const [isScanningStore, setIsScanningStore] = useState(false);
   
-  // Magnifying Glass Effect State
+  // Filtering States
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const [activeRange, setActiveRange] = useState<'all' | 'today' | 'week' | 'month'>('all');
+
+  const [isLoadingMap, setIsLoadingMap] = useState(true);
+  const [globalAnalysis, setGlobalAnalysis] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
   const [isMapHovered, setIsMapHovered] = useState(false);
   const [isNearStore, setIsNearStore] = useState(false);
-  const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
+  const [focusPoint, setFocusPoint] = useState({ x: 50, y: 50 });
+  
   const mapContainerRef = useRef<HTMLDivElement>(null);
-
   const dashboardRef = useRef<HTMLDivElement>(null);
   const prevFeedbacksLength = useRef(feedbacks.length);
+
+  // Apply Time Filters
+  const timeFilteredFeedbacks = useMemo(() => {
+    return feedbacks.filter(f => {
+      const fDate = new Date(f.timestamp);
+      const start = startDate ? new Date(startDate) : null;
+      const end = endDate ? new Date(endDate) : null;
+      
+      if (start) start.setHours(0, 0, 0, 0);
+      if (end) end.setHours(23, 59, 59, 999);
+
+      if (start && fDate < start) return false;
+      if (end && fDate > end) return false;
+      return true;
+    });
+  }, [feedbacks, startDate, endDate]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setIsLoadingMap(false), 2000);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (feedbacks.length > prevFeedbacksLength.current) {
@@ -110,23 +147,23 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
   }, [feedbacks.length]);
 
   const averageNps = useMemo(() => {
-    if (feedbacks.length === 0) return 0;
-    const promoters = feedbacks.filter(f => f.npsScore >= 9).length;
-    const detractors = feedbacks.filter(f => f.npsScore <= 6).length;
-    return Math.round(((promoters - detractors) / feedbacks.length) * 100);
-  }, [feedbacks]);
+    if (timeFilteredFeedbacks.length === 0) return 0;
+    const promoters = timeFilteredFeedbacks.filter(f => f.npsScore >= 9).length;
+    const detractors = timeFilteredFeedbacks.filter(f => f.npsScore <= 6).length;
+    return Math.round(((promoters - detractors) / timeFilteredFeedbacks.length) * 100);
+  }, [timeFilteredFeedbacks]);
 
   const filteredFeedbacks = useMemo(() => {
-    return feedbacks.filter(f => 
+    return timeFilteredFeedbacks.filter(f => 
       f.customer?.name.toLowerCase().includes(tableSearchTerm.toLowerCase()) ||
       f.storeLocation.toLowerCase().includes(tableSearchTerm.toLowerCase()) ||
       f.comment?.toLowerCase().includes(tableSearchTerm.toLowerCase())
     );
-  }, [feedbacks, tableSearchTerm]);
+  }, [timeFilteredFeedbacks, tableSearchTerm]);
 
   const storeSpecificData = useMemo(() => {
     if (!selectedStoreOnMap) return null;
-    const storeFeedbacks = feedbacks.filter(f => 
+    const storeFeedbacks = timeFilteredFeedbacks.filter(f => 
       f.storeLocation.toLowerCase().includes(selectedStoreOnMap.name.toLowerCase())
     );
     const last5 = storeFeedbacks.slice(0, 5).reverse().map((f, i) => ({
@@ -135,7 +172,7 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
     }));
     const count = storeFeedbacks.length;
     
-    let summary = "Feedback insuficiente para análise individual.";
+    let summary = "Feedback insuficiente para análise individual no período selecionado.";
     if (count > 0) {
       const avg = storeFeedbacks.reduce((acc, f) => acc + f.npsScore, 0) / count;
       if (avg >= 8.5) summary = "Vizinhos extremamente satisfeitos com o atendimento.";
@@ -143,13 +180,67 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
       else summary = "Operação estável com boa aceitação dos vizinhos.";
     }
     return { last5, summary, count };
-  }, [selectedStoreOnMap, feedbacks]);
+  }, [selectedStoreOnMap, timeFilteredFeedbacks]);
+
+  const setRange = (range: 'all' | 'today' | 'week' | 'month') => {
+    setActiveRange(range);
+    const now = new Date();
+    let start = new Date();
+    
+    switch(range) {
+      case 'today':
+        start.setHours(0,0,0,0);
+        break;
+      case 'week':
+        start.setDate(now.getDate() - 7);
+        break;
+      case 'month':
+        start.setMonth(now.getMonth() - 1);
+        break;
+      case 'all':
+      default:
+        setStartDate('');
+        setEndDate('');
+        return;
+    }
+    
+    setStartDate(start.toISOString().split('T')[0]);
+    setEndDate(now.toISOString().split('T')[0]);
+  };
+
+  const clearFilters = () => {
+    setStartDate('');
+    setEndDate('');
+    setActiveRange('all');
+  };
 
   const handleManualSync = () => {
     setIsSyncing(true);
+    setIsLoadingMap(true);
     setTimeout(() => {
       setIsSyncing(false);
-    }, 1500);
+      setIsLoadingMap(false);
+    }, 1800);
+  };
+
+  const handleGenerateGlobalAnalysis = async () => {
+    if (timeFilteredFeedbacks.length === 0) return;
+    setIsAnalyzing(true);
+    setGlobalAnalysis(null);
+    try {
+      const result = await analyzeFeedback(timeFilteredFeedbacks);
+      setGlobalAnalysis(result);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleStoreSelection = (store: StoreLocation) => {
+    setIsScanningStore(true);
+    setSelectedStoreOnMap(store);
+    setTimeout(() => setIsScanningStore(false), 600);
   };
 
   const startRoute = (store?: StoreLocation) => {
@@ -162,12 +253,12 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
 
   const handleExportStoreCSV = () => {
     if (!selectedStoreOnMap) return;
-    const storeFeedbacks = feedbacks.filter(f => 
+    const storeFeedbacks = timeFilteredFeedbacks.filter(f => 
       f.storeLocation.toLowerCase().includes(selectedStoreOnMap.name.toLowerCase())
     );
     
     if (storeFeedbacks.length === 0) {
-      alert("Nenhum feedback registrado para esta loja ainda.");
+      alert("Nenhum feedback registrado para esta loja ainda no período selecionado.");
       return;
     }
 
@@ -212,41 +303,66 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
     }
   };
 
-  const handleMapMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!mapContainerRef.current) return;
+  const handleMapMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!mapContainerRef.current || isLoadingMap) return;
     const rect = mapContainerRef.current.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
-    setZoomOrigin({ x, y });
+    
+    let closestStore: StoreLocation | null = null;
+    let minDistance = Infinity;
 
-    // Check proximity to any store marker for interactive lens feedback
-    const near = ALL_STORES.some(store => {
+    ALL_STORES.forEach(store => {
       const dx = x - store.x;
       const dy = y - store.y;
-      return Math.sqrt(dx*dx + dy*dy) < 3.5; // Threshold for "near"
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestStore = store;
+      }
     });
-    setIsNearStore(near);
-  };
+
+    const snapRange = 6.5; 
+    const snapThreshold = 1.2; 
+    const isNear = minDistance < snapRange;
+    setIsNearStore(isNear);
+
+    if (isNear && closestStore) {
+      let snapFactor = 0;
+      if (minDistance < snapThreshold) {
+        snapFactor = 1;
+      } else {
+        snapFactor = 1 - (minDistance - snapThreshold) / (snapRange - snapThreshold);
+      }
+      
+      const effectiveX = closestStore.x * snapFactor + x * (1 - snapFactor);
+      const effectiveY = closestStore.y * snapFactor + y * (1 - snapFactor);
+      setFocusPoint({ x: effectiveX, y: effectiveY });
+    } else {
+      setFocusPoint({ x, y });
+    }
+  }, [isLoadingMap]);
 
   const KPICard = ({ label, val, trend, icon: Icon, color, bg, info }: any) => (
-    <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm hover:shadow-[0_45px_90px_-20px_rgba(243,146,0,0.35)] hover:-translate-y-4 hover:border-[#f39200]/50 transition-all duration-500 group relative cursor-pointer overflow-hidden">
+    <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm hover:shadow-[0_25px_60px_-15px_rgba(243,146,0,0.4)] hover:-translate-y-3 hover:border-orange-200 transition-all duration-500 group relative cursor-pointer overflow-hidden">
       <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-[#f39200]/10 to-yellow-400/5 rounded-full -mr-16 -mt-16 group-hover:scale-[2.5] transition-transform duration-1000 ease-out"></div>
-      <div className="absolute bottom-0 left-0 w-full h-1 bg-gradient-to-r from-orange-700 to-yellow-400 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+      <div className="absolute bottom-0 left-0 w-full h-1.5 bg-gradient-to-r from-orange-600 to-yellow-400 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
 
-      <div className="absolute -top-4 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 pointer-events-none transition-all duration-300 transform group-hover:-translate-y-4 z-40 w-56">
-        <div className="bg-black text-white px-5 py-4 rounded-2xl text-[10px] font-bold uppercase tracking-widest text-center shadow-2xl border border-[#f39200]/30 relative leading-relaxed">
+      <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 pointer-events-none transition-all duration-500 ease-out transform translate-y-2 group-hover:-translate-y-4 z-40 w-[max(180px,85%)] max-w-[240px]">
+        <div className="bg-black/95 backdrop-blur-md text-white px-5 py-4 rounded-2xl shadow-2xl border border-[#f39200]/30 relative leading-relaxed overflow-hidden">
           <div className="flex items-center justify-center gap-2 mb-2 text-[#f39200]">
-            <Info size={14} />
-            <span className="font-black">Definição da Métrica</span>
+            <span className="text-[9px] font-black uppercase tracking-widest">Métrica Analítica</span>
           </div>
-          {info}
+          <p className="text-[9px] md:text-[10px] font-bold uppercase tracking-widest text-center text-gray-200">
+            {info}
+          </p>
           <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-3 bg-black rotate-45 border-r border-b border-[#f39200]/30"></div>
         </div>
       </div>
 
       <div className="flex items-center justify-between mb-6 relative z-10">
         <div className={`p-4 ${bg} ${color} rounded-2xl group-hover:scale-110 group-hover:bg-gradient-to-br group-hover:from-orange-700 group-hover:to-yellow-400 group-hover:text-black transition-all duration-300 shadow-sm`}>
-          <Icon size={24} className="group-hover:drop-shadow-sm" />
+          <Icon size={24} />
         </div>
         <span className="text-[10px] font-black text-gray-300 group-hover:text-[#f39200] uppercase tracking-[0.2em] transition-colors">{label}</span>
       </div>
@@ -260,8 +376,36 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
   );
 
   return (
-    <div ref={dashboardRef} className="p-10 space-y-10 animate-fadeIn bg-[#f8f9fa] relative">
-      
+    <div ref={dashboardRef} className="p-10 space-y-8 animate-fadeIn bg-[#f8f9fa] relative">
+      <style>{`
+        @keyframes kibaboScan {
+          0% { left: -5%; opacity: 0; }
+          20% { opacity: 0.6; }
+          80% { opacity: 0.6; }
+          100% { left: 105%; opacity: 0; }
+        }
+        @keyframes pulsePin {
+          0% { transform: scale(0.8); opacity: 0.8; }
+          50% { transform: scale(2.5); opacity: 0; }
+          100% { transform: scale(0.8); opacity: 0; }
+        }
+        .kibabo-map-grid {
+          background-image: 
+            linear-gradient(to right, rgba(243,146,0,0.05) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(243,146,0,0.05) 1px, transparent 1px);
+          background-size: 40px 40px;
+        }
+        .scan-line {
+          width: 2px;
+          height: 100%;
+          background: linear-gradient(to bottom, transparent, #f39200, transparent);
+          box-shadow: 0 0 15px #f39200;
+          position: absolute;
+          top: 0;
+          animation: kibaboScan 3s linear infinite;
+        }
+      `}</style>
+
       {showLiveNotification && (
         <div className="fixed top-8 right-8 z-[100] animate-slideInRight">
           <div className="bg-black text-white px-8 py-5 rounded-3xl shadow-2xl flex items-center gap-5 border border-orange-500/30 backdrop-blur-xl">
@@ -269,26 +413,37 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
               <BellRing size={24} className="text-black" />
             </div>
             <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-orange-500">Fluxo em Tempo Real</p>
-              <p className="text-sm font-bold">Novo vizinho detectado na rede!</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-orange-500">Live Feedback</p>
+              <p className="text-sm font-bold">Novo registro detectado!</p>
             </div>
           </div>
         </div>
       )}
 
+      {/* Header Section */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
         <div>
-          <h1 className="text-4xl font-black text-gray-900 tracking-tighter uppercase italic">
+          <h1 className="text-4xl font-black text-gray-900 tracking-tighter uppercase italic flex items-center gap-4">
             Dashboard <span className="text-[#f39200]">Performance</span>
+            {isSyncing && <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_#22c55e]"></div>}
           </h1>
-          <p className="text-gray-400 font-bold text-xs uppercase tracking-[0.3em] mt-2">Gestão Completa de 40 Unidades</p>
+          <div className="flex items-center gap-2 mt-2">
+            <p className="text-gray-400 font-bold text-xs uppercase tracking-[0.3em]">Analítica de rede em tempo real</p>
+            {(startDate || endDate) && (
+              <span className="text-[10px] font-black bg-orange-50 text-[#f39200] px-3 py-1 rounded-full border border-orange-100 uppercase tracking-widest animate-fadeIn">
+                Período: {startDate ? new Date(startDate).toLocaleDateString() : 'Início'} — {endDate ? new Date(endDate).toLocaleDateString() : 'Hoje'}
+              </span>
+            )}
+          </div>
         </div>
+        
         <div className="flex items-center gap-3 no-print">
            <div className="relative group">
-             <ActionTooltip text="Sincroniza os dados locais com o Google Cloud Storage." />
+             <ActionTooltip text="Sincronizar Cloud" />
              <button 
                onClick={handleManualSync} 
-               className={`p-3 bg-white hover:bg-gray-50 rounded-2xl transition-all shadow-sm border border-gray-100 hover:scale-110 active:scale-95 ${isSyncing ? 'animate-spin text-orange-600' : 'text-gray-400'}`}
+               disabled={isSyncing}
+               className={`p-4 bg-gradient-to-r from-orange-700 to-yellow-400 text-black rounded-2xl transition-all shadow-lg hover:-translate-y-1 hover:shadow-[0_15px_30px_-10px_rgba(243,146,0,0.5)] active:scale-95 ${isSyncing ? 'animate-spin' : ''}`}
              >
                <RefreshCcw size={20} />
              </button>
@@ -296,80 +451,161 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <KPICard label="NPS Médio" val={`${averageNps}%`} trend="Lealdade" icon={Heart} color="text-red-500" bg="bg-red-50" info="Net Promoter Score: Mede a fidelidade e probabilidade de recomendação da marca Kibabo pelos vizinhos." />
-        <KPICard label="Feedbacks" val={feedbacks.length} trend="Total" icon={MessageSquare} color="text-gray-900" bg="bg-gray-100" info="Volume total de avaliações coletadas em tempo real através dos totens de atendimento." />
-        <KPICard label="Rede Kibabo" val={ALL_STORES.length} trend="Lojas" icon={MapPin} color="text-orange-600" bg="bg-orange-50" info="Quantidade total de lojas físicas integradas no ecossistema de gestão centralizado." />
-        <KPICard label="Sinc. Google" val="100%" trend="Sheets" icon={Globe} color="text-green-500" bg="bg-green-50" info="Estado de saúde da ponte de dados entre a aplicação e as ferramentas Google Cloud." />
+      {/* Filter Bar Section - Enhanced with more control and tooltips */}
+      <div className="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm flex flex-col md:flex-row items-center gap-4 no-print">
+        <div className="flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-2xl border border-gray-100">
+          <Filter size={16} className="text-gray-400" />
+          <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Filtrar Período:</span>
+        </div>
+        
+        <div className="flex flex-wrap items-center gap-2">
+          {[
+            { id: 'all', label: 'Tudo', hint: 'Análise do Período Total' },
+            { id: 'today', label: 'Hoje', hint: 'Filtrar Dados de Hoje' },
+            { id: 'week', label: '7 Dias', hint: 'Métricas da Última Semana' },
+            { id: 'month', label: '30 Dias', hint: 'Métricas do Último Mês' }
+          ].map(r => (
+            <div key={r.id} className="relative group">
+              <ActionTooltip text={r.hint} />
+              <button
+                onClick={() => setRange(r.id as any)}
+                className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                  activeRange === r.id 
+                    ? 'bg-black text-white shadow-lg' 
+                    : 'bg-white text-gray-400 border border-gray-100 hover:border-orange-200 hover:text-orange-600'
+                }`}
+              >
+                {r.label}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="h-6 w-[1px] bg-gray-100 hidden md:block"></div>
+
+        <div className="flex items-center gap-3">
+          <div className="relative group">
+            <ActionTooltip text="Data Inicial" />
+            <Calendar size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input 
+              type="date" 
+              value={startDate}
+              onChange={(e) => { setStartDate(e.target.value); setActiveRange('all'); }}
+              className="pl-10 pr-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black uppercase outline-none focus:border-orange-500 transition-all font-bold"
+            />
+          </div>
+          <span className="text-gray-300 font-bold">até</span>
+          <div className="relative group">
+            <ActionTooltip text="Data Final" />
+            <Calendar size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input 
+              type="date" 
+              value={endDate}
+              onChange={(e) => { setEndDate(e.target.value); setActiveRange('all'); }}
+              className="pl-10 pr-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-[10px] font-black uppercase outline-none focus:border-orange-500 transition-all font-bold"
+            />
+          </div>
+          {(startDate || endDate) && (
+            <div className="relative group">
+              <ActionTooltip text="Limpar Filtro de Datas" />
+              <button 
+                onClick={clearFilters}
+                className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-all active:scale-95"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
+      {/* KPI Cards Section */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <KPICard label="NPS Médio" val={`${averageNps}%`} trend="Fidelidade" icon={Heart} color="text-red-500" bg="bg-red-50" info="A probabilidade de recomendação de nossos vizinhos no período selecionado." />
+        <KPICard label="Feedbacks" val={timeFilteredFeedbacks.length} trend="Período" icon={MessageSquare} color="text-gray-900" bg="bg-gray-100" info="O volume total de registros de voz dos vizinhos capturados entre as datas filtradas." />
+        <KPICard label="Rede Kibabo" val={ALL_STORES.length} trend="Lojas" icon={MapPin} color="text-orange-600" bg="bg-orange-50" info="Unidades ativas monitoradas em tempo real em Luanda e arredores." />
+        <KPICard label="Sincronização" val="100%" trend="OK" icon={Globe} color="text-green-500" bg="bg-green-50" info="Integridade da comunicação entre os terminais PDV e o Kibabo Cloud." />
+      </div>
+
+      {/* Map and Store Detail Section */}
       <div className="bg-white rounded-[3rem] shadow-sm border border-gray-100 overflow-hidden flex flex-col lg:flex-row min-h-[700px]">
-        {/* INTERACTIVE MAP CONTAINER WITH MAGNIFYING GLASS ZOOM */}
         <div 
           ref={mapContainerRef}
-          onMouseEnter={() => setIsMapHovered(true)}
+          onMouseEnter={() => !isLoadingMap && setIsMapHovered(true)}
           onMouseLeave={() => setIsMapHovered(false)}
           onMouseMove={handleMapMouseMove}
-          className="flex-1 bg-[#e5e3df] relative overflow-hidden cursor-crosshair group/map"
+          className="flex-1 bg-[#e5e3df] relative overflow-hidden cursor-crosshair group/map kibabo-map-grid"
         >
-          {/* Lupa / Magnifying Glass Indicator */}
+          {isMapHovered && !isLoadingMap && <div className="scan-line z-40 pointer-events-none" />}
+
+          {isLoadingMap && (
+            <div className="absolute inset-0 z-[60] bg-[#e5e3df]/60 backdrop-blur-[2px] flex items-center justify-center animate-fadeIn">
+               <div className="flex flex-col items-center">
+                  <div className="relative mb-8">
+                     <div className="absolute inset-0 bg-orange-500/20 rounded-full animate-ping scale-150"></div>
+                     <div className="relative w-24 h-24 bg-white rounded-full flex items-center justify-center shadow-2xl border-2 border-orange-500/50">
+                        <Radar size={40} className="text-[#f39200] animate-spin" />
+                     </div>
+                  </div>
+                  <div className="text-center">
+                     <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter italic mb-1">GEO-SCANNING</h3>
+                     <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.3em] flex items-center gap-2 justify-center">
+                        <Loader2 size={12} className="animate-spin" />
+                        Mapeando Unidades
+                     </p>
+                  </div>
+               </div>
+            </div>
+          )}
+
           <div 
-            className={`absolute pointer-events-none z-50 transition-all duration-300 ${isMapHovered ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}
+            className={`absolute pointer-events-none z-50 transition-all duration-[300ms] ease-out ${isMapHovered && !isLoadingMap ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}
             style={{ 
-              left: `${zoomOrigin.x}%`, 
-              top: `${zoomOrigin.y}%`,
+              left: `${focusPoint.x}%`, 
+              top: `${focusPoint.y}%`,
               transform: 'translate(-50%, -50%)'
             }}
           >
-            <div className={`w-20 h-20 border-2 rounded-full flex items-center justify-center bg-white/5 backdrop-blur-[1px] shadow-[0_0_50px_rgba(243,146,0,0.3)] transition-all duration-300 ${isNearStore ? 'border-orange-500 w-24 h-24 bg-orange-500/10' : 'border-gray-400/50'}`}>
-              {isNearStore ? (
-                <Target size={24} className="text-orange-600 animate-pulse" />
-              ) : (
-                <Maximize2 size={16} className="text-gray-500" />
-              )}
+            <div className={`w-28 h-28 border-2 rounded-full flex items-center justify-center bg-white/5 backdrop-blur-[3px] shadow-[0_0_80px_rgba(243,146,0,0.5)] transition-all duration-300 ${isNearStore ? 'border-orange-500 scale-110 bg-orange-500/20' : 'border-gray-400/40 scale-100'}`}>
+              <div className="relative">
+                {isNearStore ? (
+                  <Target size={32} className="text-orange-600 relative z-10 drop-shadow-2xl animate-[bounce_1.5s_infinite]" />
+                ) : (
+                  <Maximize2 size={20} className="text-gray-400/40" />
+                )}
+              </div>
             </div>
           </div>
 
           <div 
-            className="absolute inset-0 transition-transform duration-500 ease-out"
+            className={`absolute inset-0 transition-all duration-500 ease-out ${isLoadingMap ? 'blur-md opacity-50 grayscale' : 'blur-0 opacity-100 grayscale-0'}`}
             style={{ 
-              transform: isMapHovered ? 'scale(1.8)' : 'scale(1)',
-              transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`
+              transform: isMapHovered ? 'scale(1.75)' : 'scale(1)',
+              transformOrigin: `${focusPoint.x}% ${focusPoint.y}%`
             }}
           >
-            <div className="absolute inset-0 opacity-40">
-              <svg width="100%" height="100%">
-                <defs><pattern id="gridMap" width="100" height="100" patternUnits="userSpaceOnUse"><path d="M 100 0 L 0 0 0 100" fill="none" stroke="#fff" strokeWidth="4"/></pattern></defs>
-                <rect width="100%" height="100%" fill="url(#gridMap)" />
-                <path d="M 0,0 L 45,0 Q 50,35 30,65 L 0,85 Z" fill="#aad3df" />
-                <path d="M 65,15 Q 85,10 98,30 L 85,55 L 55,50 Z" fill="#c4d3ab" />
-                <line x1="0" y1="55" x2="100%" y2="55" stroke="#fff" strokeWidth="12" />
-                <line x1="52%" y1="0" x2="52%" y2="100%" stroke="#fff" strokeWidth="12" />
-              </svg>
-            </div>
-
             <div className="absolute inset-0">
               {ALL_STORES.map((store) => (
                 <button 
                   key={store.id} 
-                  onClick={() => setSelectedStoreOnMap(store)} 
-                  className={`absolute transform -translate-x-1/2 -translate-y-full transition-all hover:scale-150 z-10 ${isMapHovered ? 'scale-75' : 'scale-100'}`} 
+                  onClick={() => handleStoreSelection(store)} 
+                  disabled={isLoadingMap}
+                  className={`absolute transform -translate-x-1/2 -translate-y-full transition-all hover:scale-150 z-10 ${isMapHovered ? 'scale-75' : 'scale-100'} ${isLoadingMap ? 'opacity-0' : 'opacity-100'}`} 
                   style={{ left: `${store.x}%`, top: `${store.y}%` }}
                 >
                   <div className="relative group">
-                     <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-1.5 bg-black/20 rounded-full blur-[1px]"></div>
+                     {(selectedStoreOnMap?.id === store.id || isLoadingMap) && (
+                        <div className="absolute inset-0 w-full h-full rounded-full border-2 border-orange-500" style={{ animation: 'pulsePin 1.5s ease-out infinite' }}></div>
+                     )}
+                     
                      <div className={`relative flex flex-col items-center transition-all duration-300 ${selectedStoreOnMap?.id === store.id ? 'scale-125' : 'scale-100'}`}>
                         <div className={`w-7 h-7 rounded-full flex items-center justify-center p-1 border-2 shadow-lg transition-colors ${selectedStoreOnMap?.id === store.id ? 'bg-black border-black text-white' : 'bg-white border-[#f39200] text-[#f39200]'}`}>
                           <Store size={12} />
                         </div>
-                        <div className={`w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-t-[7px] -mt-[1px] ${selectedStoreOnMap?.id === store.id ? 'border-t-black' : 'border-t-[#f39200]'}`}></div>
                      </div>
                      {selectedStoreOnMap?.id === store.id && (
                        <div className="absolute top-[-45px] left-1/2 -translate-x-1/2 flex items-center gap-2 bg-white px-3 py-2 rounded-xl shadow-2xl border border-gray-100 animate-fadeIn z-50">
                           <span className="text-[10px] font-black uppercase text-gray-900 whitespace-nowrap">{store.name}</span>
-                          <button onClick={(e) => { e.stopPropagation(); startRoute(store); }} className="w-6 h-6 bg-[#f39200] rounded-lg flex items-center justify-center text-white hover:bg-black transition-colors">
-                            <Navigation size={12} fill="currentColor" />
-                          </button>
                        </div>
                      )}
                   </div>
@@ -377,28 +613,16 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
               ))}
             </div>
           </div>
-
-          {/* Map Overlays (Fixed position, not zoomed) */}
-          <div className="absolute bottom-8 left-8 z-20 pointer-events-none">
-            <div className="bg-white/95 backdrop-blur-md p-6 rounded-[2rem] shadow-2xl border border-gray-100 max-w-[240px]">
-               <h3 className="text-sm font-black uppercase text-gray-900 mb-1 italic">Rede <span className="text-[#f39200]">Kibabo</span></h3>
-               <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{ALL_STORES.length} Unidades Mapeadas</p>
-               <div className="mt-4 flex items-center gap-2">
-                 <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></div>
-                 <span className="text-[9px] font-black text-gray-600 uppercase tracking-tighter">Conexão Google Earth Ativa</span>
-               </div>
-            </div>
-          </div>
-          
-          <div className="absolute top-8 left-8 z-20 pointer-events-none">
-             <div className="flex items-center gap-2 px-4 py-2 bg-black/80 backdrop-blur-md text-white rounded-full border border-orange-500/30 shadow-lg">
-                <Maximize2 size={12} className="text-[#f39200]" />
-                <span className="text-[9px] font-black uppercase tracking-widest">Lupa Digital Ativa</span>
-             </div>
-          </div>
         </div>
 
-        <div className="w-full lg:w-[460px] bg-white border-l border-gray-100 p-10 flex flex-col">
+        <div className="w-full lg:w-[460px] bg-white border-l border-gray-100 p-10 flex flex-col relative">
+          {isScanningStore && (
+            <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-[70] flex flex-col items-center justify-center animate-fadeIn">
+               <Activity size={40} className="text-orange-600 animate-pulse mb-4" />
+               <p className="text-[10px] font-black uppercase tracking-widest text-orange-600 italic">Capturando métricas...</p>
+            </div>
+          )}
+
           {selectedStoreOnMap ? (
             <div key={selectedStoreOnMap.id} className="space-y-6 animate-slideInRight h-full flex flex-col">
               <div className="flex items-center gap-4">
@@ -409,64 +633,36 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
                   <h4 className="text-2xl font-black text-gray-900 uppercase leading-none tracking-tighter italic">
                     <span className="text-[#f39200]">KIBABO</span> {selectedStoreOnMap.name}
                   </h4>
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">ID: #UNIT-{selectedStoreOnMap.id.padStart(3, '0')}</p>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">Status Período Selecionado</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gray-50/50 p-6 rounded-[2rem] border border-gray-100 group hover:border-orange-200 transition-colors">
-                  <div className="flex items-center gap-2 text-black mb-1">
-                    <Star size={14} fill="#f39200" className="text-[#f39200]" />
-                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Score Médio</span>
-                  </div>
+                <div className="bg-gray-50/50 p-6 rounded-[2rem] border border-gray-100">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Score Médio</span>
                   <p className="text-3xl font-black text-gray-900">{selectedStoreOnMap.rating}</p>
                 </div>
-                <div className="bg-gray-50/50 p-6 rounded-[2rem] border border-gray-100 group hover:border-orange-200 transition-colors">
-                  <div className="flex items-center gap-2 text-orange-600 mb-1">
-                    <Users size={14} fill="currentColor" />
-                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Total Vizinhos</span>
-                  </div>
+                <div className="bg-gray-50/50 p-6 rounded-[2rem] border border-gray-100">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Vizinhos</span>
                   <p className="text-3xl font-black text-gray-900">{storeSpecificData?.count || 0}</p>
                 </div>
               </div>
 
-              <div className="bg-gray-50/30 p-8 rounded-[2.5rem] border border-gray-100 flex-1 flex flex-col overflow-hidden">
-                <div className="flex items-center justify-between mb-6">
-                  <h5 className="text-[10px] font-black uppercase tracking-widest text-gray-400 flex items-center gap-2">
-                    <TrendingUp size={14} className="text-orange-600" />
-                    Análise NPS (Últimos Feedbacks)
-                  </h5>
-                </div>
-                <div className="flex-1 h-32 min-h-[160px] relative">
+              <div className="bg-gray-50/30 p-8 rounded-[2.5rem] border border-gray-100 flex-1 flex flex-col">
+                <h5 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-6">Tendência de Satisfação</h5>
+                <div className="flex-1 h-32 min-h-[160px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={storeSpecificData?.last5 || []} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
-                      <RechartsTooltip 
-                        cursor={{ fill: 'rgba(243, 146, 0, 0.05)' }}
-                        content={({ active, payload }) => {
-                          if (active && payload && payload.length) {
-                            const score = payload[0].value as number;
-                            const type = score >= 9 ? 'Promotor' : score >= 7 ? 'Neutro' : 'Detrator';
-                            const color = score >= 9 ? '#22c55e' : score >= 7 ? '#f39200' : '#ef4444';
-                            
-                            return (
-                              <div className="bg-white/95 backdrop-blur-md px-5 py-4 rounded-[1.5rem] shadow-2xl border border-gray-100 animate-fadeIn">
-                                <div className="flex items-center gap-3 mb-2">
-                                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }}></div>
-                                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-900">{type}</span>
-                                </div>
-                                <p className="text-3xl font-black text-gray-900 tabular-nums">{score}</p>
-                              </div>
-                            );
-                          }
+                    <BarChart data={storeSpecificData?.last5 || []}>
+                      <RechartsTooltip content={({ active, payload }) => {
+                          if (active && payload?.length) return (
+                            <div className="bg-white p-3 rounded-xl shadow-xl border border-gray-100 text-[10px] font-black">NPS: {payload[0].value}</div>
+                          );
                           return null;
                         }}
                       />
-                      <Bar dataKey="score" radius={[8, 8, 8, 8]} barSize={32}>
+                      <Bar dataKey="score" radius={[8, 8, 8, 8]}>
                         {storeSpecificData?.last5?.map((entry, index) => (
-                          <Cell 
-                            key={`cell-${index}`} 
-                            fill={entry.score >= 9 ? '#22c55e' : entry.score >= 7 ? '#f39200' : '#ef4444'} 
-                          />
+                          <Cell key={index} fill={entry.score >= 9 ? '#22c55e' : entry.score >= 7 ? '#f39200' : '#ef4444'} />
                         ))}
                       </Bar>
                       <XAxis hide dataKey="index" />
@@ -474,70 +670,126 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
                   </ResponsiveContainer>
                 </div>
                 <div className="mt-6 pt-6 border-t border-gray-100">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Sparkles size={16} className="text-orange-600" />
-                    <span className="text-[11px] font-black uppercase text-gray-900">IA Insight Local:</span>
-                  </div>
-                  <p className="text-[11px] font-bold text-gray-500 italic leading-relaxed">
-                    "{storeSpecificData?.summary}"
-                  </p>
+                  <span className="text-[11px] font-black uppercase text-gray-900 block mb-2">Resumo IA:</span>
+                  <p className="text-[11px] font-bold text-gray-500 italic leading-relaxed">"{storeSpecificData?.summary}"</p>
                 </div>
               </div>
 
-              <div className="space-y-3 mt-auto pt-4">
-                <div className="relative group">
-                  <ActionTooltip text="Abre o Google Maps com a rota otimizada para esta unidade." />
-                  <button 
-                    onClick={() => startRoute()} 
-                    className="w-full flex items-center justify-center gap-4 py-6 bg-gradient-to-r from-orange-700 to-yellow-400 text-black rounded-[1.8rem] text-sm font-black uppercase tracking-widest shadow-xl shadow-orange-100 hover:scale-[1.02] hover:-translate-y-2 hover:shadow-[0_30px_60px_-15px_rgba(243,146,0,0.5)] active:scale-95 transition-all duration-300"
-                  >
-                    <Navigation size={22} fill="currentColor" />
-                    Iniciar Rota (Google Maps)
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-3">
                   <div className="relative group">
-                    <ActionTooltip text="Gera um arquivo .csv com todos os registros de feedback desta loja." />
-                    <button 
-                      onClick={handleExportStoreCSV} 
-                      className="w-full flex items-center justify-center gap-3 py-5 bg-gradient-to-r from-orange-700 to-yellow-400 text-black rounded-[1.5rem] text-[10px] font-black uppercase tracking-widest shadow-lg shadow-orange-100/30 hover:scale-[1.02] hover:-translate-y-1.5 hover:shadow-[0_20px_40px_-12px_rgba(243,146,0,0.4)] active:scale-95 transition-all duration-300"
-                    >
-                      <FileDown size={18} />
-                      Dados CSV
+                    <ActionTooltip text="Abrir no Google Maps" />
+                    <button onClick={() => startRoute()} className="w-full py-6 bg-gradient-to-r from-orange-700 to-yellow-400 text-black rounded-[1.8rem] text-sm font-black uppercase tracking-widest shadow-xl hover:-translate-y-1 hover:shadow-[0_20px_40px_-12px_rgba(243,146,0,0.5)] transition-all active:scale-95">
+                      Iniciar Rota
                     </button>
                   </div>
                   <div className="relative group">
-                    <ActionTooltip text="Visualiza a fachada e o entorno 3D da unidade via Google Earth." />
-                    <button 
-                      onClick={() => window.open(`https://earth.google.com/web/@${selectedStoreOnMap.lat},${selectedStoreOnMap.lng},500a,35y,0h,0t,0r`, '_blank')} 
-                      className="w-full flex items-center justify-center gap-3 py-5 bg-black text-white rounded-[1.5rem] text-[10px] font-black uppercase tracking-widest hover:bg-gray-900 transition-colors"
-                    >
-                      <Globe size={18} className="text-[#f39200]" />
-                      Earth View
+                    <ActionTooltip text="Baixar Planilha CSV" />
+                    <button onClick={handleExportStoreCSV} className="w-full py-5 bg-gradient-to-r from-orange-700 to-yellow-400 text-black rounded-[1.5rem] text-[10px] font-black uppercase tracking-widest shadow-lg hover:-translate-y-1 hover:shadow-[0_15px_30px_-10px_rgba(243,146,0,0.3)] transition-all active:scale-95">
+                      Dados CSV Período
                     </button>
                   </div>
-                </div>
               </div>
             </div>
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-center px-12 opacity-30">
-              <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mb-8">
-                <MapIcon size={48} className="text-gray-300" />
-              </div>
-              <p className="text-base font-black uppercase tracking-widest leading-tight italic">
-                Selecione uma das 40 lojas no mapa para gerenciar rotas e exportar métricas
-              </p>
+              <MapIcon size={48} className="text-gray-300 mb-6" />
+              <p className="text-base font-black uppercase tracking-widest italic">Selecione uma loja para filtrar dados individuais</p>
             </div>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
-        <div className="lg:col-span-2 bg-white p-12 rounded-[3rem] shadow-sm border border-gray-100">
-           <div className="flex items-center justify-between mb-12">
-             <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter italic">Fluxo na Rede <span className="text-orange-600">Kibabo</span></h3>
+      {/* Cloud Sync & AI Analysis Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 no-print">
+        <div className="bg-white rounded-[3rem] p-10 border border-gray-100 shadow-sm relative overflow-hidden group">
+           <div className="absolute top-0 right-0 p-8 text-orange-500/10 group-hover:scale-110 transition-transform">
+              <Cloud size={120} />
            </div>
-           <div className="h-64">
+           <div className="relative z-10">
+              <div className="flex items-center gap-3 mb-6">
+                 <div className="p-3 bg-orange-50 text-orange-600 rounded-xl">
+                   <Cloud size={24} />
+                 </div>
+                 <h3 className="text-xl font-black text-gray-900 uppercase italic tracking-tighter">Integração <span className="text-[#f39200]">Google Cloud</span></h3>
+              </div>
+              <p className="text-gray-400 font-bold text-xs uppercase tracking-widest mb-8 max-w-sm">Sincronização persistente de feedbacks em tempo real.</p>
+              
+              <div className="flex gap-4">
+                 <div className="relative group">
+                   <ActionTooltip text="Atualizar Dados Agora" />
+                   <button 
+                    onClick={handleManualSync}
+                    className="px-8 py-5 bg-gradient-to-r from-orange-700 to-yellow-400 text-black rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl hover:-translate-y-1 hover:shadow-[0_15px_30px_-10px_rgba(243,146,0,0.5)] transition-all flex items-center gap-3 active:scale-95"
+                   >
+                     <RefreshCcw size={16} className={isSyncing ? 'animate-spin' : ''} />
+                     Sincronizar
+                   </button>
+                 </div>
+              </div>
+           </div>
+        </div>
+
+        <div className="bg-black rounded-[3rem] p-10 text-white relative overflow-hidden group shadow-2xl flex flex-col justify-between">
+           <div className="absolute top-0 right-0 p-10 opacity-10 group-hover:scale-125 transition-transform duration-1000">
+              <BrainCircuit size={180} />
+           </div>
+           <div className="relative z-10">
+              <div className="flex items-center gap-4 mb-6">
+                 <div className="p-4 bg-gradient-to-br from-orange-600 to-yellow-400 rounded-2xl text-black">
+                    <BrainCircuit size={28} />
+                 </div>
+                 <div>
+                   <h3 className="text-2xl font-black uppercase tracking-tighter italic">Análise <span className="text-[#f39200]">IA Estratégica</span></h3>
+                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.3em]">Insights Gerenciais Google Gemini</p>
+                 </div>
+              </div>
+              <p className="text-gray-400 text-xs font-bold uppercase tracking-widest mb-8 max-w-sm">Analise sentimentos e obtenha sugestões acionáveis para o período.</p>
+           </div>
+
+           <div className="relative z-10 group">
+              <ActionTooltip text="Executar Análise com Gemini" />
+              <button 
+                 onClick={handleGenerateGlobalAnalysis}
+                 disabled={isAnalyzing || timeFilteredFeedbacks.length === 0}
+                 className={`px-10 py-5 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all flex items-center gap-3 active:scale-95 ${isAnalyzing ? 'bg-gray-800 text-gray-500 animate-pulse' : 'bg-white text-black hover:bg-[#f39200] hover:shadow-[0_20px_40px_-10px_rgba(243,146,0,0.4)] hover:-translate-y-1'}`}
+              >
+                 {isAnalyzing ? <><Loader2 size={16} className="animate-spin" /> Processando...</> : <><Sparkles size={16} /> Gerar Relatório IA</>}
+              </button>
+           </div>
+        </div>
+      </div>
+
+      { (globalAnalysis || isAnalyzing) && (
+        <div className="animate-fadeIn no-print">
+           <div className="bg-white rounded-[3rem] border border-gray-100 shadow-sm overflow-hidden relative">
+              <div className="bg-gray-50 px-10 py-5 border-b border-gray-100 flex items-center justify-between">
+                 <div className="flex items-center gap-3">
+                    <Terminal size={18} className="text-orange-600" />
+                    <span className="text-[10px] font-black uppercase tracking-widest text-gray-900 italic">Console Analítico Kibabo</span>
+                 </div>
+              </div>
+              
+              <div className="p-12">
+                 {isAnalyzing ? (
+                   <div className="space-y-4">
+                      <div className="h-4 bg-gray-100 rounded-full w-3/4 animate-pulse"></div>
+                      <div className="h-4 bg-gray-100 rounded-full w-1/2 animate-pulse"></div>
+                      <div className="h-4 bg-gray-100 rounded-full w-5/6 animate-pulse"></div>
+                   </div>
+                 ) : (
+                   <div className="text-gray-700 leading-relaxed font-medium whitespace-pre-line text-sm md:text-base animate-fadeIn italic">
+                      {globalAnalysis}
+                   </div>
+                 )}
+              </div>
+           </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+        <div className="lg:col-span-2 bg-white p-12 rounded-[3rem] shadow-sm border border-gray-100 relative group overflow-hidden">
+           <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter italic mb-12 relative z-10">Picos de Atendimento</h3>
+           <div className="h-64 relative z-10">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={[
                   { time: '08:00', clients: 120 }, { time: '10:00', clients: 250 }, { time: '12:00', clients: 410 },
@@ -550,43 +802,22 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
                       <stop offset="95%" stopColor={KIBABO_ORANGE} stopOpacity={0}/>
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                  <XAxis dataKey="time" stroke="#cbd5e1" fontSize={10} fontWeight="black" axisLine={false} tickLine={false} />
                   <Area type="monotone" dataKey="clients" stroke={KIBABO_ORANGE} strokeWidth={4} fill="url(#colorTraffic)" />
+                  <XAxis dataKey="time" hide />
                 </AreaChart>
               </ResponsiveContainer>
            </div>
         </div>
 
-        <div className="bg-white p-12 rounded-[3rem] shadow-sm border border-gray-100 flex flex-col">
-           <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter mb-8 italic">Integração <span className="text-orange-600">Google Cloud</span></h3>
-           <div className="space-y-4 flex-1">
-              <div className="relative group">
-                <ActionTooltip text="Acessa a planilha mestre consolidada com todos os vizinhos no Google Sheets." />
-                <a href="https://sheets.google.com" target="_blank" className="flex items-center justify-between p-6 bg-gradient-to-r from-orange-700 to-yellow-400 rounded-[2rem] hover:scale-105 hover:-translate-y-1 hover:shadow-xl hover:shadow-orange-100/40 transition-all group">
-                   <div className="flex items-center gap-4">
-                      <div className="p-3 bg-white/90 backdrop-blur-md rounded-xl shadow-sm text-gray-900"><FileSpreadsheet size={24} /></div>
-                      <span className="text-xs font-black uppercase text-black">Feedback Sheets</span>
-                 </div>
-                 <ExternalLink size={14} className="text-black/40 group-hover:text-black" />
-                </a>
-              </div>
-              <div className="relative group">
-                <ActionTooltip text="Documentos e manuais de operação gerados automaticamente no Google Docs." />
-                <a href="https://docs.google.com" target="_blank" className="flex items-center justify-between p-6 bg-gradient-to-r from-orange-700 to-yellow-400 rounded-[2rem] hover:scale-105 hover:-translate-y-1 hover:shadow-xl hover:shadow-orange-100/40 transition-all group">
-                   <div className="flex items-center gap-4">
-                      <div className="p-3 bg-white/90 backdrop-blur-md rounded-xl shadow-sm text-gray-900"><FileText size={24} /></div>
-                      <span className="text-xs font-black uppercase text-black">Relatórios Docs</span>
-                   </div>
-                   <ExternalLink size={14} className="text-black/40 group-hover:text-black" />
-                </a>
-              </div>
+        <div className="bg-white p-12 rounded-[3rem] shadow-sm border border-gray-100 flex flex-col justify-center items-center text-center">
+           <div className="w-20 h-20 bg-black rounded-3xl flex items-center justify-center text-[#f39200] mb-8 shadow-2xl">
+              <FileDown size={40} />
            </div>
-           <div className="relative group">
-             <ActionTooltip text="Captura a visualização atual do Dashboard e exporta como um relatório PDF A4." />
-             <button onClick={handleExportPDF} className="mt-8 w-full py-5 bg-black text-white rounded-[1.8rem] text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-3 hover:bg-gray-900 transition-colors shadow-xl shadow-gray-200">
-                <FileDown size={18} />
-                Exportar Dashboard (PDF)
+           <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter mb-4 italic">Exportação Geral</h3>
+           <div className="relative group w-full">
+             <ActionTooltip text="Baixar PDF do Dashboard" />
+             <button onClick={handleExportPDF} className="w-full py-6 bg-black text-white rounded-[1.8rem] text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-3 hover:bg-gray-900 transition-all shadow-xl hover:-translate-y-1 active:scale-95">
+                Gerar Relatório PDF
              </button>
            </div>
         </div>
@@ -594,56 +825,44 @@ const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ feedbacks }) => {
 
       <div className="bg-white rounded-[3.5rem] shadow-sm border border-gray-100 overflow-hidden">
         <div className="px-12 py-10 border-b border-gray-50 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="flex items-center gap-4">
-            <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter italic">Vizinhos em <span className="text-orange-600">Tempo Real</span></h3>
-            <div className="flex items-center gap-2 px-3 py-1 bg-orange-50 rounded-full border border-orange-100">
-               <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
-               <span className="text-[9px] font-black text-orange-600 uppercase tracking-widest">Live Sync Ativo</span>
-            </div>
-          </div>
+          <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter italic">Feedbacks Filtrados ({filteredFeedbacks.length})</h3>
           <div className="relative max-w-sm w-full">
             <Search size={18} className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-300" />
             <input 
               type="text" 
-              placeholder="Pesquisar registros..."
+              placeholder="Pesquisar resultados..."
               value={tableSearchTerm}
               onChange={(e) => setTableSearchTerm(e.target.value)}
-              className="w-full pl-14 pr-6 py-4 bg-gray-50 border-2 border-transparent rounded-[1.5rem] text-sm font-bold focus:bg-white focus:border-orange-500 outline-none transition-all"
+              className="w-full pl-14 pr-6 py-4 bg-gray-50 border-2 border-transparent rounded-[1.5rem] focus:bg-white focus:border-orange-500 outline-none transition-all font-bold"
             />
           </div>
         </div>
-        <div className="p-10">
-          <div className="space-y-4">
-            {filteredFeedbacks.length > 0 ? filteredFeedbacks.map((f) => {
-              const isPremiumRating = f.rating === FeedbackRating.EXCELLENT || f.rating === FeedbackRating.GOOD;
-              return (
-                <div key={f.id} className="flex flex-col md:flex-row md:items-center gap-6 p-8 rounded-[2.5rem] border-2 border-gray-50/50 bg-gray-50/10 hover:bg-white hover:border-[#f39200]/20 transition-all duration-300 group/row animate-slideInUp">
-                  <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 shadow-sm ${isPremiumRating ? 'bg-gradient-to-tr from-orange-600 to-yellow-400 text-black' : 'bg-white text-gray-400'}`}>
+        <div className="p-10 space-y-4">
+            {filteredFeedbacks.length > 0 ? filteredFeedbacks.map((f) => (
+                <div key={f.id} className="flex flex-col md:flex-row md:items-center gap-6 p-8 rounded-[2.5rem] border-2 border-gray-50/50 bg-gray-50/10 hover:bg-white transition-all group">
+                  <div className="w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 bg-white text-gray-400 group-hover:bg-[#f39200] group-hover:text-black transition-all">
                     <User size={24} />
                   </div>
                   <div className="w-56">
                     <p className="text-sm font-black uppercase truncate text-gray-900">{f.customer?.name || 'Anônimo'}</p>
                     <p className="text-[10px] font-black tracking-widest uppercase text-orange-600">{f.storeLocation}</p>
                   </div>
-                  <div className="flex items-center gap-4">
-                    <span className={`px-4 py-2 rounded-xl text-xs font-black ${f.npsScore >= 9 ? 'bg-green-100 text-green-700' : f.npsScore >= 7 ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>
-                      NPS {f.npsScore}
-                    </span>
+                  <div className={`px-4 py-2 rounded-xl text-xs font-black min-w-[80px] text-center ${f.npsScore >= 9 ? 'bg-green-100 text-green-700' : f.npsScore >= 7 ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>
+                    NPS {f.npsScore}
                   </div>
                   <div className="flex-1 text-xs text-gray-500 font-bold italic truncate">
                     {f.comment || "Sem relato adicional"}
                   </div>
                   <div className="text-[9px] font-black uppercase text-gray-300">
-                    {new Date(f.timestamp).toLocaleTimeString()}
+                    {new Date(f.timestamp).toLocaleDateString()}
                   </div>
                 </div>
-              );
-            }) : (
-              <div className="text-center py-20 opacity-20 italic">
-                 <p className="font-black uppercase tracking-widest text-sm">Aguardando novos vizinhos...</p>
+            )) : (
+              <div className="text-center py-24 opacity-20 italic font-black uppercase tracking-widest flex flex-col items-center gap-6">
+                 <AlertCircle size={48} />
+                 Nenhum registro encontrado
               </div>
             )}
-          </div>
         </div>
       </div>
     </div>

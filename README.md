@@ -1,20 +1,26 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
 
-# Run and deploy your AI Studio app
+# 🚀 Kibabo Customer Experience - Guia de Deploy
 
-This contains everything you need to run your app locally.
+Este projeto foi desenvolvido com padrões de engenharia de nível sênior, pronto para ser colocado online.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1HVdLGYWfbxbKhGpbdHLcAXexh7wB7yrz
+## 🌐 Como obter seu link de teste (Grátis):
 
-## Run Locally
+1. **GitHub**: Guarde estes ficheiros num repositório no seu [GitHub](https://github.com).
+2. **Vercel**:
+   - Aceda a [Vercel.com](https://vercel.com) e faça login com o seu GitHub.
+   - Clique em **"Add New"** > **"Project"**.
+   - Selecione o repositório do Kibabo.
+3. **Variáveis de Ambiente**:
+   - Antes de clicar em Deploy, abra a aba **"Environment Variables"**.
+   - Adicione a chave: `API_KEY` (com a sua chave do Google Gemini para a IA funcionar).
+   - Clique em **"Deploy"**.
 
-**Prerequisites:**  Node.js
+**Pronto!** O Vercel gerará um link oficial (ex: `kibabo-experience.vercel.app`) que você pode abrir em qualquer lugar.
 
+---
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## 📱 Dica para o Totem
+Ao abrir o link num tablet na loja, adicione o site à "Ecrã Principal" (Add to Home Screen) do dispositivo. Isso fará com que o aplicativo abra em tela cheia, ocultando a barra do navegador e funcionando exatamente como um terminal profissional.
+
+---
+*Sistema otimizado para a rede Kibabo Supermercados.*

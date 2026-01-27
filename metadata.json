@@ -1,7 +1,9 @@
 {
-  "name": "Kibabo - Gestão de Satisfação & Fluxo",
-  "description": "Sistema completo para monitoramento de satisfação do cliente e gestão de tráfego para a rede Kibabo Supermercados, integrado com ferramentas Google.",
+  "name": "Kibabo Experience - Versão Web",
+  "description": "Sistema unificado de gestão de satisfação para a rede Kibabo Supermercados, otimizado para navegação web e totens de atendimento.",
   "requestFramePermissions": [
     "geolocation"
-  ]
+  ],
+  "version": "2.5.0",
+  "author": "Kibabo Tech Division"
 }
